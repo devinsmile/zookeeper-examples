@@ -1,6 +1,7 @@
 package uk.co.softsquare.zookeeper.client;
 
 import com.google.common.base.Throwables;
+import com.google.common.collect.Sets;
 import org.apache.zookeeper.*;
 import org.apache.zookeeper.data.Stat;
 import org.slf4j.Logger;
@@ -9,13 +10,16 @@ import uk.co.softsquare.zookeeper.ZooConfig;
 
 import java.io.IOException;
 import java.util.List;
-import java.util.concurrent.ConcurrentSkipListSet;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
+
+import static com.google.common.collect.Sets.newHashSet;
 
 public class ServiceListing {
     private static final Logger LOGGER = LoggerFactory.getLogger(ServiceListing.class);
     private static final String SERVICE_GROUPING = "/myservices";
     private final ZooKeeper zooKeeper;
-    private final ConcurrentSkipListSet<String> knownServices = new ConcurrentSkipListSet<>();
+    private final AtomicReference<Set<String>> knownServices = new AtomicReference<>(newHashSet());
     private final ZooConfig config;
 
     public ServiceListing(ZooConfig config) {
@@ -36,11 +40,18 @@ public class ServiceListing {
             String newServiceName = "service" + config.getClientPort();
             zooKeeper.create(SERVICE_GROUPING + "/" + newServiceName, new byte[0],
                     ZooDefs.Ids.OPEN_ACL_UNSAFE, CreateMode.EPHEMERAL);
-            knownServices.add(newServiceName);
+            updateTo(newHashSet(newServiceName));
             LOGGER.info("created service node '{}'", newServiceName);
         } catch (Exception e) {
             Throwables.propagate(e);
         }
+    }
+
+    private void updateTo(Set<String> newValues) {
+        Set<String> currentValues;
+        do {
+            currentValues = knownServices.get();
+        } while(!knownServices.compareAndSet(currentValues, newValues));
     }
 
     private void watchServices() {
@@ -104,8 +115,7 @@ public class ServiceListing {
             Event.EventType type = event.getType();
             switch (type) {
                 case NodeChildrenChanged:
-                    knownServices.clear();
-                    knownServices.addAll(getChildren());
+                    updateTo(newHashSet(getChildren()));
                     LOGGER.info("now know of {}", knownServices);
                     break;
                 case NodeCreated:
